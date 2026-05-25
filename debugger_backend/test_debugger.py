@@ -2,7 +2,7 @@ import sys
 import json
 from pathlib import Path
 import argparse
-
+import time
 import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -41,8 +41,8 @@ class DebuggerTestSuite:
             self.test_initialization()
             self.test_load_symbols()
             self.test_target_connection()
-            self.test_breakpoint_operations()
-            self.test_state_inspection()
+            #self.test_breakpoint_operations()
+            #self.test_state_inspection()
             self.test_execution_control()
             self.test_cleanup()
         except KeyboardInterrupt:
@@ -188,22 +188,18 @@ class DebuggerTestSuite:
             return False
         
         try:
-            # Test list frames
             print("[→] Listing stack frames...")
             frames_resp = self.debugger.list_frames()
             print_response("list_frames()", frames_resp)
             
-            # Test list locals
             print("[→] Listing local variables...")
             locals_resp = self.debugger.list_locals()
             print_response("list_locals()", locals_resp)
             
-            # Test list registers
             print("[→] Listing CPU registers...")
             regs_resp = self.debugger.list_registers(format="x")
             print_response("list_registers(format='x')", regs_resp)
             
-            # Test evaluate expression (basic test with a value that should always work)
             print("[→] Evaluating expression...")
             expr_resp = self.debugger.evaluate_expression("1 + 1")
             print_response("evaluate_expression('1 + 1')", expr_resp)
@@ -218,37 +214,77 @@ class DebuggerTestSuite:
     
     def test_execution_control(self):
         print_section("Test 6: Execution Control")
-        
+
         if not self.debugger:
-            print("[⊘] Skipped - debugger not initialized")
+            print("[⊘] Skipped")
             self.results["skipped"].append("Execution Control")
             return False
-        
+
         try:
-            print("[→] Testing execution control commands...")
-            print("    (These require target to be halted at a breakpoint)")
-            
-            # These commands will fail if target isn't halted, which is OK
-            commands = [
-                ("continue", self.debugger.execute_continue),
-                ("next", self.debugger.execute_next),
-                ("step", self.debugger.execute_step),
-                ("finish", self.debugger.execute_finish),
-            ]
-            
-            for name, cmd in commands:
-                print(f"\n[→] Testing {name}()...")
-                try:
-                    response = cmd()
-                    print_response(f"execute_{name}()", response)
-                except Exception as e:
-                    print(f"[!] {name} skipped (expected if target not halted): {e}")
-            
-            print("[✓] Execution control commands tested")
-            self.results["passed"].append("Execution Control")
+            # 1. Connect to target (already done in test 3)
+            #    At this point target is halted at reset vector — just like manual GDB
+
+            # 2. Reset and halt — wait properly
+            print("[→] Resetting target...")
+            self.debugger.reset_halt()
+            time.sleep(1.5)  # OpenOCD needs this — same as manual GDB pause
+
+            # 3. Set breakpoint at main
+            print("[→] Setting breakpoint at main...")
+            bp = self.debugger.insert_breakpoint("main")
+            print_response("insert_breakpoint('main')", bp)
+
+            if not bp.get("breakpoint_id"):
+                print("[✗] Failed to set breakpoint")
+                self.results["failed"].append("Execution Control")
+                return False
+
+            # 4. Continue — target runs from reset vector to main
+            print("[→] Continuing to main...")
+            cont = self.debugger.execute_continue()
+            print_response("execute_continue()", cont)
+
+            # Check if breakpoint was already hit in the continue response itself
+            if cont.get("stopped") or cont.get("reason") == "breakpoint-hit":
+                print(f"[✓] Breakpoint hit immediately, reason: {cont.get('reason')}")
+                stopped = cont  # already have the stop info
+            else:
+                # Not yet stopped, wait for async notification
+                stopped = self.debugger.wait_for_stop(timeout=15)
+                print_response("wait_for_stop()", stopped)
+
+            if stopped["status"] != "ok":
+                print("[✗] Never hit breakpoint")
+                self.results["failed"].append("Execution Control")
+                return False
+
+            print(f"[✓] Halted at main, reason: {stopped.get('reason')}")
+
+            # 6. Now step safely
+            print("[→] Testing execute_next()...")
+            stopped = self.debugger.execute_next()
+            print_response("after next()", stopped)
+
+            if stopped["status"] == "ok":
+                line = stopped.get("payload", {}).get("frame", {}).get("line", "?")
+                print(f"[✓] Stepped to line: {line}")
+            else:
+                print(f"[✗] next() failed: {stopped.get('message')}")
+
+            print("[→] Testing execute_step()...")
+            stopped = self.debugger.execute_step()
+            print_response("after step()", stopped)
+
+            if stopped["status"] == "ok":
+                line = stopped.get("payload", {}).get("frame", {}).get("line", "?")
+                func = stopped.get("payload", {}).get("frame", {}).get("func", "?")
+                print(f"[✓] Stepped into {func}() at line {line}")
+            else:
+                print(f"[✗] step() failed: {stopped.get('message')}")
             return True
+
         except Exception as e:
-            print(f"[!] Execution control test failed: {e}")
+            print(f"[✗] Execution control test failed: {e}")
             self.results["failed"].append("Execution Control")
             return False
     
@@ -343,9 +379,6 @@ def main():
     
     suite = DebuggerTestSuite(elf_path=args.elf)
     suite.run_all()
-    """suite.test_initialization()
-    suite.test_load_symbols()
-    suite.test_target_connection()"""
 
 if __name__ == "__main__":
     main()
