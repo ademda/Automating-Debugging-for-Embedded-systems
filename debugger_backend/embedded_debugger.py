@@ -143,6 +143,15 @@ class EmbeddedDebugger:
             return 'unknown'
         return 'halted'  # if monitor responded, target is halted
 
+    def _resume_and_wait(self, cmd: str, timeout: int = 10) -> Dict[str, Any]:
+        """Send a resuming command and wait for target to stop, however the notification arrives."""
+        result = self._execute_gdb(cmd, timeout=timeout)
+        if result.get("stopped"):
+            return result
+        if result["status"] == "error":
+            return result
+        return self.wait_for_stop(timeout=timeout)
+
     def load_symbol_table(self, elf_path: str) -> Dict[str, Any]:
         self._check_connected()
         result = self._execute_gdb(f'-file-exec-and-symbols "{elf_path}"')
@@ -209,36 +218,10 @@ class EmbeddedDebugger:
         self._check_connected()
         return self._execute_gdb(f'-data-read-memory-bytes {address} {length}')
     
-    def execute_continue(self) -> Dict[str, Any]:
-        self._check_connected()
-        result = self._execute_gdb('-exec-continue', timeout=5)
-        # If stop notification already bundled in response, don't wait again
-        if result.get("stopped"):
-            logger.info("Stop already received in continue response")
-            return result
-        return result
-    
-    def execute_next(self) -> Dict[str, Any]:
-        self._check_connected()
-        result = self._execute_gdb('-exec-next', timeout=10)
-        if result.get("stopped"):
-            return result
-        # Not bundled — wait for async notification
-        return self.wait_for_stop(timeout=10)
-
-    def execute_step(self) -> Dict[str, Any]:
-        self._check_connected()
-        result = self._execute_gdb('-exec-step', timeout=10)
-        if result.get("stopped"):
-            return result
-        return self.wait_for_stop(timeout=10)
-
-    def execute_finish(self) -> Dict[str, Any]:
-        self._check_connected()
-        result = self._execute_gdb('-exec-finish', timeout=10)
-        if result.get("stopped"):
-            return result
-        return self.wait_for_stop(timeout=10)
+    def execute_next(self)    -> Dict[str, Any]: return self._resume_and_wait('-exec-next')
+    def execute_step(self)    -> Dict[str, Any]: return self._resume_and_wait('-exec-step')
+    def execute_finish(self)  -> Dict[str, Any]: return self._resume_and_wait('-exec-finish')
+    def execute_continue(self)-> Dict[str, Any]: return self._resume_and_wait('-exec-continue')
     
     def execute_interrupt(self) -> Dict[str, Any]:
         self._check_connected()

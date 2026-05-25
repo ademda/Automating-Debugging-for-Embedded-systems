@@ -41,8 +41,8 @@ class DebuggerTestSuite:
             self.test_initialization()
             self.test_load_symbols()
             self.test_target_connection()
-            #self.test_breakpoint_operations()
-            #self.test_state_inspection()
+            self.test_breakpoint_operations()
+            self.test_state_inspection()
             self.test_execution_control()
             self.test_cleanup()
         except KeyboardInterrupt:
